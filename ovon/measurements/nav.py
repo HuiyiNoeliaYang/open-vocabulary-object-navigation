@@ -220,3 +220,13 @@ class FailureModeMeasure(Measure):
             self._metric = metrics
         except Exception as e:
             print("Error ", e)
+            if self._metric is None:
+                self._metric = {
+                    "stop_too_far": False,
+                    "stop_failure": False,
+                    "recognition_failure": False,
+                    "misidentification": False,
+                    "exploration": False,
+                    "area_seen": 0.0,
+                    "num_steps": self._elapsed_steps,
+                }

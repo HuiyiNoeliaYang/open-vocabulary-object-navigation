@@ -1,0 +1,140 @@
+# @package _global_
+#
+# NaVILA ObjectNav Evaluation Config
+# Evaluates NaVILA VLM-based navigation agent on OVON ObjectNav benchmark
+
+defaults:
+  - /habitat_baselines: habitat_baselines_rl_config_base
+  - /habitat_baselines/rl/policy/obs_transforms:
+    - resize
+  - objectnav_stretch_hm3d
+  - /habitat/simulator/sim_sensors@habitat.simulator.agents.main_agent.sim_sensors.semantic_sensor: semantic_sensor
+  - override /habitat/task/lab_sensors:
+    - clip_objectgoal_sensor
+    - step_id_sensor
+  - _self_
+
+habitat:
+  environment:
+    max_episode_steps: 500
+    iterator_options:
+      shuffle: False
+      max_scene_repeat_steps: -1
+
+  task:
+    success_reward: 2.5
+    slack_reward: -1e-3
+    lab_sensors:
+      clip_objectgoal_sensor:
+        cache: data/text_embeddings/siglip.pkl
+    measurements:
+      success:
+        success_distance: 1.0
+      distance_to_goal:
+        type: OVONDistanceToGoal
+
+  dataset:
+    type: "OVON-v1"
+    split: val_unseen
+    # Note: val_unseen uses val_unseen_hard.json.gz, val_seen uses val_seen.json.gz
+    # To evaluate on val_seen, override both split AND data_path:
+    #   habitat.dataset.split=val_seen habitat.dataset.data_path=data/datasets/ovon/hm3d/val_seen/val_seen.json.gz
+    data_path: data/datasets/ovon/hm3d/val_unseen/val_unseen_hard.json.gz
+  simulator:
+    type: "OVONSim-v0"
+    # NaVILA uses 15-degree turn granularity (not 30)
+    turn_angle: 15
+    tilt_angle: 30
+    # Use v0 action space (4 actions: STOP, FORWARD, LEFT, RIGHT)
+    # This matches NaVILA's action set (no LOOK_UP/LOOK_DOWN)
+    action_space_config: "v0"
+    forward_step_size: 0.25
+    navmesh_settings:
+      agent_max_climb: 0.1
+      cell_height: 0.05
+    agents:
+      main_agent:
+        sim_sensors:
+          rgb_sensor:
+            # NaVILA expects 360x640 RGB input (height x width)
+            width: 360
+            height: 640
+            hfov: 42
+            position: [0, 1.31, 0]
+          semantic_sensor:
+            width: 360
+            height: 640
+            hfov: 42
+            position: [0, 1.31, 0]
+        height: 1.41
+        radius: 0.17
+    habitat_sim_v0:
+      gpu_device_id: 0
+      allow_sliding: False
+
+habitat_baselines:
+  torch_gpu_id: 0
+  tensorboard_dir: "tb/navila_objectnav"
+  video_dir: "video_dir/navila_objectnav"
+
+  # NaVILA checkpoint path
+  eval_ckpt_path_dir: "/workspace/NaVILA/checkpoints/navila-llama3-8b-8f"
+
+  # Evaluation settings
+  test_episode_count: -1  # Evaluate all episodes in the split
+  eval:
+    split: "val_unseen"  # Options: val_seen, val_unseen
+    should_load_ckpt: False  # We load NaVILA model, not RL checkpoint
+    video_option: []  # Options: ["disk"], ["tensorboard"], or []
+    evals_per_ep: 1
+
+  # Use NaVILA trainer
+  trainer_name: "navila_objectnav"
+
+  # NaVILA is autoregressive, runs single environment
+  num_environments: 1
+
+  # Video rendering views (optional)
+  video_render_views: []
+  eval_keys_to_include_in_name: []
+  video_fps: 10
+
+  # Not used for evaluation, but required by config
+  checkpoint_folder: "data/checkpoints/navila"
+  num_updates: -1
+  total_num_steps: 1
+  log_interval: 1
+  num_checkpoints: 1
+
+  # Performance settings
+  force_torch_single_threaded: True
+  verbose: True
+
+  # Observation transforms
+  rl:
+    policy:
+      # These settings are not used by NaVILA but required by config structure
+      name: "PointNavResNetPolicy"
+
+    ppo:
+      # Not used for evaluation, but required by base config
+      hidden_size: 512
+      clip_param: 0.2
+      ppo_epoch: 1
+      num_mini_batch: 1
+      value_loss_coef: 0.5
+      entropy_coef: 0.01
+      lr: 2.5e-4
+      eps: 1e-5
+      max_grad_norm: 0.2
+      num_steps: 64
+      use_gae: True
+      gamma: 0.99
+      tau: 0.95
+
+    ddppo:
+      distrib_backend: NCCL
+      pretrained: False
+      pretrained_encoder: False
+      train_encoder: False
+      reset_critic: False
