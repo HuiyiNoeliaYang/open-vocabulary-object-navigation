@@ -1,27 +1,119 @@
 <p align="center">
   <img src="docs/ovon_task.jpg" width="700">
-  <h1 align="center">HM3D-OVON: A Dataset and Benchmark for Open-Vocabulary Object Goal Navigation</h1>
-  <h3 align="center">
-    <a href="http://naoki.io/">Naoki Yokoyama</a>,
-    <a href="https://ram81.github.io/">Ram Ramrakhya</a>,
-    <a href="https://abhishekdas.com/">Abhishek Das</a>,
-    <a href="https://faculty.cc.gatech.edu/~dbatra/">Dhruv Batra</a>,
-    <a href="https://faculty.cc.gatech.edu/~sha9/">Sehoon Ha</a>
-  </h3>
-  <p align="center">
-    <a href="http://naoki.io/portfolio/ovon.html">Project Website</a>
-  </p>
+  <h1 align="center">Evaluating NaVILA on the OVON Benchmark:<br>Performance and Failure Mode Analysis</h1>
 </p>
 
-## Overview
+> **This repository evaluates [NaVILA](https://navila-bot.github.io/) on the [HM3D-OVON](https://naoki.io/portfolio/ovon.html) open-vocabulary object navigation benchmark.** NaVILA is a VLM-based navigation agent (LLaMA-3 8B + vision tower) that generates actions from images and text. We assess its zero-shot performance on the OVON ObjectNav task and analyze its failure modes.
 
-> **This repository is used to run [NaVILA](https://navila-bot.github.io/) on the [HM3D-OVON](https://naoki.io/portfolio/ovon.html) benchmark as a baseline.**
+---
 
-We present the Habitat-Matterport 3D Open Vocabulary Object Goal Navigation dataset (HM3D-OVON), a large-scale benchmark that broadens the scope and semantic range of prior Object Goal Navigation (ObjectNav) benchmarks. Leveraging the HM3DSem dataset, HM3D-OVON incorporates over 15k annotated instances of household objects across 379 distinct categories, derived from photo-realistic 3D scans of real-world environments.
+## Results Summary
 
-In contrast to earlier ObjectNav datasets, which limit goal objects to a predefined set of 6–21 categories, HM3D-OVON facilitates the training and evaluation of models with an open set of goals defined through free-form language at test time. Through this open-vocabulary formulation, HM3D-OVON encourages progress towards learning visuo-semantic navigation behaviors capable of searching for any object specified by text.
+**Evaluation scope:** 3,000 episodes | 36 unique scenes | `val_unseen` split
 
-We systematically evaluate and compare several different types of approaches on HM3D-OVON. We find that it can be used to train an open-vocabulary ObjectNav agent that achieves both higher performance and greater robustness to localization and actuation noise than the state-of-the-art ObjectNav approach. Videos available at: naoki.io/ovon.
+| Metric | Value |
+|--------|-------|
+| **Success Rate** | 0.6% |
+| **SPL** | 0.46% |
+| **Avg Distance to Goal** | 5.76 m |
+| **Avg Steps** | 290.4 |
+
+### Comparison with Other Methods (Val Unseen)
+
+| Method | SR (%) | SPL (%) |
+|--------|--------|---------|
+| BC | 5.4 | 1.9 |
+| DAgger | 10.2 | 4.7 |
+| RL | 18.6 | 7.5 |
+| BCRL | 8.0 | 2.8 |
+| DAgRL | 18.3 | 7.9 |
+| VLFM | 35.2 | 19.6 |
+| DAgRL+OD | 37.1 | 19.9 |
+| **NaVILA** | **0.6** | **0.5** |
+
+NaVILA significantly underperforms all baselines on OVON, including simple behavior cloning (BC).
+
+---
+
+## Architecture Comparison
+
+|  | OVON (RL-based) | NaVILA |
+|--|-----------------|--------|
+| **Instruction** | One object category | Detailed text instruction |
+| **Input** | Numeric tensors | Images + text prompt |
+| **Inference** | Single forward pass | Autoregressive generation |
+| **Output** | Action per step | Text (parsed to action) |
+
+---
+
+## Failure Analysis
+
+Of 3,000 episodes, **2,982 failed** (99.4%) and only **18 succeeded** (0.6%).
+
+All failures share a common pattern: the agent never sees the goal object ("Goal Not Seen"). These break down into two root causes:
+
+| Failure Mode | Count | Percentage |
+|--------------|-------|------------|
+| **Misidentification** — agent called STOP but was not near the goal | 1,516 | 50.5% |
+| **Exploration** — agent never called STOP, exhausted step budget | 1,466 | 48.9% |
+
+### Failure Classification Decision Tree
+
+```
+Failed?
+├── [Yes] Was the object ever on screen?
+│   ├── [Yes] Did the agent call STOP?
+│   │   ├── [Yes] → Stop too far
+│   │   └── [No] Did it ever get within 0.5m?
+│   │       ├── [Yes] → Stop failure
+│   │       └── [No] → Recognition failure
+│   └── [No] Did the agent call STOP?
+│       ├── [Yes] → Misidentification
+│       └── [No] → Exploration failure
+└── [No] → Success
+```
+
+### Key Observations
+
+**Why failures happen:**
+- No exploration behavior — agent does not systematically search the environment
+- Gets stuck in infinite left/right turning loops
+- Required to "find" objects it has no strategy to locate
+
+**Why the rare successes happen:**
+- Goal object was in immediate line of sight from the starting position
+- Spacious starting area with clear paths
+
+### Task Mismatch
+
+NaVILA was **built for step-by-step instruction following** (e.g., "turn left, go to the door, turn right"), **not for open-ended exploration or object goal navigation**. The OVON task requires the agent to autonomously explore an unseen environment to find a specified object — a capability NaVILA was never trained for.
+
+### Per-Target Success Rate (Top 15 by episode count)
+
+| Target | Success | Rate |
+|--------|---------|------|
+| mirror | 0/262 | 0.0% |
+| picture | 6/243 | 2.5% |
+| pillow | 0/234 | 0.0% |
+| stair | 1/213 | 0.5% |
+| refrigerator | 1/210 | 0.5% |
+| microwave | 1/197 | 0.5% |
+| dishwasher | 0/187 | 0.0% |
+| rug | 3/146 | 2.1% |
+| plant | 1/113 | 0.9% |
+| carpet | 1/89 | 1.1% |
+| nightstand | 0/78 | 0.0% |
+| blinds | 0/73 | 0.0% |
+| dresser | 0/73 | 0.0% |
+| book | 0/66 | 0.0% |
+| hanger | 0/59 | 0.0% |
+
+---
+
+## Proposed Improvements
+
+- **Architecture:** Add frontier-based exploration (frontier mapping) to give NaVILA an explicit exploration strategy
+- **Finetuning:** Use DAgRL-style training to finetune the VLM on OVON navigation trajectories
 
 ---
 
@@ -36,7 +128,7 @@ We systematically evaluate and compare several different types of approaches on 
    - [Prerequisites](#prerequisites)
    - [Evaluation Commands](#evaluation-commands)
    - [Visualization](#visualization)
-   - [Failure Analysis](#failure-analysis)
+   - [Failure Analysis Scripts](#failure-analysis-scripts)
    - [Output Metrics](#output-metrics)
    - [Parallel Evaluation](#parallel-evaluation-6-gpus-load-balanced)
    - [How It Works](#how-it-works)
@@ -75,7 +167,7 @@ pip install git+https://github.com/openai/CLIP.git
 
 ## Downloading the Datasets
 
-First, set the following variables (no need to add to `.bashrc`):
+First, set the following variables:
 
 ```bash
 MATTERPORT_TOKEN_ID=<FILL IN FROM YOUR ACCOUNT INFO IN MATTERPORT>
@@ -114,8 +206,6 @@ The weights for the DagRL policy can be downloaded from the following link:
 
 ## Evaluation
 
-Run the following to evaluate:
-
 ```bash
 python -m ovon.run \
   --run-type eval \
@@ -126,8 +216,6 @@ python -m ovon.run \
 ---
 
 ## Training
-
-Run the following to train:
 
 ```bash
 python -m ovon.run \
@@ -214,8 +302,6 @@ $PYTHON -m ovon.run --run-type eval \
   habitat_baselines.video_dir=videos/navila_test
 ```
 
-Videos are saved to `habitat_baselines.video_dir` (default: `video_dir/navila_objectnav/`).
-
 #### Smart trajectory saving (recommended for large runs)
 
 Instead of recording every episode, set `NAVILA_TRAJ_SAVE_DIR` to save a curated subset — stratified by object category and outcome — with no extra config required.
@@ -248,15 +334,7 @@ backpack__success__ep107__dtg0.18.mp4
 | `NAVILA_TRAJ_MAX_FAIL_PER_CAT` | `4` | Max failure videos per category |
 | `NAVILA_TRAJ_MAX_SUCCESS_PER_CAT` | `1` | Max success videos per category |
 
-Storage estimate for `val_seen_synonyms` (36 categories):
-
-| Quota | Max videos | Approx size |
-|-------|------------|-------------|
-| 4 fail + 1 success *(default)* | 180 | ~1.8 GB |
-| 2 fail + 1 success | 108 | ~1.1 GB |
-| 1 fail + 1 success | 72 | ~720 MB |
-
-### Failure Analysis
+### Failure Analysis Scripts
 
 #### Step 1 — collect per-episode metrics during the run
 
@@ -290,7 +368,7 @@ df = pd.DataFrame(data.values())
 print("=== Overall ===")
 print(df[["success", "spl", "soft_spl", "distance_to_goal"]].mean().round(4))
 
-# Per-category success rate (sorted worst → best)
+# Per-category success rate (sorted worst -> best)
 cat_stats = (
     df.groupby("target")[["success", "spl", "soft_spl", "distance_to_goal"]]
     .mean().round(4).sort_values("success")
@@ -327,29 +405,15 @@ plt.savefig("results/analysis.png", dpi=150)
 print("Saved results/analysis.png")
 ```
 
-The script produces:
-- **Terminal:** overall averages, per-category table sorted by success rate, 5 hardest/easiest categories, outcome breakdown percentages
-- **`results/analysis.png`:** per-category success bar chart, distance-to-goal histogram by outcome, outcome pie chart
-
-The `close_fail` vs `far_fail` split is the key diagnostic: if `far_fail` dominates (>80%), the problem is exploration — the agent never finds the object. If `close_fail` is large (>15%), the problem is the STOP decision — the agent reaches the goal but doesn't stop.
-
 ### Output Metrics
-
-Metrics are displayed in two contexts:
-
-- **Live preview / per-step overlay** — values update every step and reflect the *current state within the episode* (not final results)
-- **Terminal / episode end** — printed once per episode after STOP is called, then aggregated across all episodes at the end of the run
 
 | Metric | Per-step meaning | Episode-end meaning |
 |--------|-----------------|---------------------|
 | `distance_to_goal` | Current geodesic distance (metres) to the nearest goal viewpoint right now | Final geodesic distance at the step the agent stopped |
 | `success` | 0 while the episode is running; becomes 1 only after a successful STOP | 1 if agent stopped within 1.0 m of any valid goal viewpoint, 0 otherwise |
-| `spl` | Always 0 while running — SPL is computed only on a successful stop | Success weighted by Path Length: `success × optimal_path / max(actual_path, optimal_path)` |
-| `soft_spl` | Path efficiency so far; 0 if agent hasn't made net progress toward goal | Path efficiency regardless of success — always ≥ `spl` |
-| `distance_to_goal_reward` | `previous_distance − current_distance` this step; negative means no progress | Cumulative reward signal for the episode |
-| `top_down_map.agent_angle` | Agent heading in radians at this step (`π ≈ 3.14` = facing backward) | Agent's final heading at stop time |
-
-**Reference from the OVON paper:** `success` > 0.20 and `spl` > 0.10 on `val_unseen` is competitive.
+| `spl` | Always 0 while running — SPL is computed only on a successful stop | Success weighted by Path Length: `success * optimal_path / max(actual_path, optimal_path)` |
+| `soft_spl` | Path efficiency so far; 0 if agent hasn't made net progress toward goal | Path efficiency regardless of success — always >= `spl` |
+| `distance_to_goal_reward` | `previous_distance - current_distance` this step; negative means no progress | Cumulative reward signal for the episode |
 
 ### Parallel Evaluation (6 GPUs, load-balanced)
 
@@ -364,35 +428,16 @@ Results are written to `data/eval/val_unseen/<timestamp>/` and include:
 - `failure_analysis.html` — Sankey failure analysis chart
 - `videos/` — curated trajectory videos (global quota: 5 fail + 2 success per category)
 
-**Before your first full run, validate the setup with the smoke test** (~20 min, 3 episodes per GPU):
+**Smoke test** (~20 min, 3 episodes per GPU):
 
 ```bash
 bash scripts/eval/smoke_test_balanced.sh
 ```
 
-The smoke test verifies no crashes occur at end-of-run, that `episode_metrics.json` is written correctly per worker, and that the merge and Sankey generation work. All 20 checks must pass before committing to the full run.
-
-**Monitor progress** while the eval is running:
+**Monitor progress:**
 
 ```bash
 bash scripts/eval/watch_progress.sh
-```
-
-This refreshes every 60 seconds and shows a progress bar, done/total episode count, elapsed time, and ETA for each GPU worker.
-
-**Recommended tmux workflow:**
-
-```bash
-# Window 1 — run the eval
-tmux new-session -s eval
-bash scripts/eval/eval_val_unseen_balanced.sh
-
-# Window 2 — monitor progress (Ctrl+B C to open new window)
-bash scripts/eval/watch_progress.sh
-
-# Detach and come back later
-# Ctrl+B D        →  detach
-# tmux attach -t eval  →  reattach
 ```
 
 ### How It Works
@@ -402,26 +447,25 @@ The NaVILA integration replaces the RL policy's `act()` call with a VLM inferenc
 1. The current RGB frame is appended to a rolling history of past frames
 2. The history is sampled/padded to 8 frames and passed to NaVILA alongside the prompt: *"Navigate to and find a `<object>`. When you are close to the `<object>`, stop."*
 3. NaVILA outputs one of the canonical text actions below
-4. The direction and degree are parsed; turns larger than 15° are broken into multiple 15°-step actions queued before re-querying the model; forward moves always trigger a fresh query
+4. The direction and degree are parsed; turns larger than 15 deg are broken into multiple 15 deg-step actions queued before re-querying the model; forward moves always trigger a fresh query
 5. Episode object categories are preloaded from `content/*.json.gz` at startup since `current_episodes()` returns stripped objects without category info
 
 **Canonical outputs:**
 
 | Raw text output | Action | Steps executed |
 |---|---|---|
-| `The next action is stop.` | STOP | — |
-| `The next action is move forward 25 cm.` | FORWARD | 1 × 25 cm |
-| `The next action is move forward 50 cm.` | FORWARD | 1 × 25 cm (re-queried after each) |
-| `The next action is move forward 75 cm.` | FORWARD | 1 × 25 cm (re-queried after each) |
-| `The next action is turn left 15 degree.` | TURN_LEFT | 1 × 15° |
-| `The next action is turn left 30 degree.` | TURN_LEFT | 2 × 15° (queued) |
-| `The next action is turn left 45 degree.` | TURN_LEFT | 3 × 15° (queued) |
-| `The next action is turn right 15 degree.` | TURN_RIGHT | 1 × 15° |
-| `The next action is turn right 30 degree.` | TURN_RIGHT | 2 × 15° (queued) |
-| `The next action is turn right 45 degree.` | TURN_RIGHT | 3 × 15° (queued) |
+| `The next action is stop.` | STOP | -- |
+| `The next action is move forward 25 cm.` | FORWARD | 1 x 25 cm |
+| `The next action is move forward 50 cm.` | FORWARD | 1 x 25 cm (re-queried after each) |
+| `The next action is turn left 15 degree.` | TURN_LEFT | 1 x 15 deg |
+| `The next action is turn left 30 degree.` | TURN_LEFT | 2 x 15 deg (queued) |
+| `The next action is turn left 45 degree.` | TURN_LEFT | 3 x 15 deg (queued) |
+| `The next action is turn right 15 degree.` | TURN_RIGHT | 1 x 15 deg |
+| `The next action is turn right 30 degree.` | TURN_RIGHT | 2 x 15 deg (queued) |
+| `The next action is turn right 45 degree.` | TURN_RIGHT | 3 x 15 deg (queued) |
 
-**Parsing notes:**
-- Action keywords matched case-insensitively: `stop` / `is move forward` / `is turn left` / `is turn right`
-- Turn degrees extracted with `r"turn\s+(?:left|right)\s+(\d+(?:\.\d+)?)\s*degree"`, converted to `n_steps = max(1, round(degree / 15))`
-- Forward moves always execute one step at a time with a fresh VLM query
-- Unrecognised output defaults to `FORWARD`
+---
+
+## Credits
+
+This repository is based on the [HM3D-OVON](https://naoki.io/portfolio/ovon.html) benchmark by Yokoyama et al. The original OVON dataset incorporates over 15k annotated instances across 379 categories from photo-realistic HM3D scans. See the [original project page](https://naoki.io/portfolio/ovon.html) for details on the dataset and benchmark.
